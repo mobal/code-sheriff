@@ -1,0 +1,13 @@
+all: format lint test
+
+format:
+	uv run ruff format .
+
+install:
+	uv sync
+
+lint:
+	uv run ruff check app/ --fix
+
+test:
+	uv run pytest tests/ --cov=app --cov-report=term-missing --cov-branch
