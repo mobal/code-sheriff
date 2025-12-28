@@ -1,29 +1,34 @@
 import uuid
+from typing import Sequence, Any
 
 import uvicorn
 from aws_lambda_powertools.logging import Logger
 from aws_lambda_powertools.logging.logger import set_package_logger
-from fastapi import FastAPI, Request, HTTPException, Header, status
+from fastapi import FastAPI, Request, HTTPException, status, Header
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import UJSONResponse
 import httpx
+from httpx import HTTPError, TransportError
 import json
 
 from mangum import Mangum
 from starlette.middleware.gzip import GZipMiddleware
 
 from app import settings
-from app.middlewares import RateLimitingMiddleware
+from app.middlewares import RateLimitingMiddleware, RequestLoggingMiddleware
 from app.models import CamelModel, GitHubRequest
-
-if settings.debug:
-    set_package_logger()
 
 logger = Logger()
 
+if settings.debug:
+    set_package_logger()
+    logger.setLevel("DEBUG")
+
 app = FastAPI(debug=settings.debug)
-app.add_middleware(RateLimitingMiddleware)
 app.add_middleware(GZipMiddleware)
+app.add_middleware(RateLimitingMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 
 handler = Mangum(app)
 handler = logger.inject_lambda_context(handler, log_event=True, clear_state=True)
@@ -43,6 +48,10 @@ class ErrorResponse(CamelModel):
     message: str
 
 
+class ValidationErrorResponse(ErrorResponse):
+    errors: Sequence[Any]
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, error: HTTPException) -> UJSONResponse:
     error_id = uuid.uuid4()
@@ -50,6 +59,40 @@ async def http_exception_handler(request: Request, error: HTTPException) -> UJSO
     return UJSONResponse(
         content=jsonable_encoder(ErrorResponse(status=error.status_code, id=error_id, message=error.detail)),
         status_code=error.status_code,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(request: Request, error: RequestValidationError) -> UJSONResponse:
+    error_id = uuid.uuid4()
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    logger.exception(f"Received request validation error {error_id=}")
+    return UJSONResponse(
+        content=jsonable_encoder(
+            ValidationErrorResponse(
+                status=status_code,
+                id=error_id,
+                message=str(error),
+                errors=error.errors(),
+            )
+        ),
+        status_code=status_code,
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_exception(request: Request, exc: Exception) -> UJSONResponse:
+    error_id = uuid.uuid4()
+    logger.exception(f"Received unexpected exception {error_id=}")
+    return UJSONResponse(
+        content=jsonable_encoder(
+            ErrorResponse(
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                id=error_id,
+                message="Internal server error",
+            )
+        ),
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
 
 
@@ -117,7 +160,7 @@ If no issues found, return an empty array: []"""
     payload = {
         "model": "claude-sonnet-4-20250514",
         "max_tokens": 4000,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
     }
 
     async with httpx.AsyncClient(timeout=90.0) as client:
@@ -134,6 +177,7 @@ If no issues found, return an empty array: []"""
                 review_text = review_text.split("```")[1].split("```")[0]
 
             comments = json.loads(review_text.strip())
+            logger.info(f"Found {len(comments)} comments", extra={"comments": comments})
             return comments if isinstance(comments, list) else []
         except json.JSONDecodeError:
             return []
@@ -174,37 +218,36 @@ async def post_review_comments(repo_full_name: str, pr_number: int, commit_sha: 
 
 @app.post("/webhooks/github")
 async def review(
-    gh_request: GitHubRequest,
-    x_github_event: str | None = Header(None),
+    request: Request,
+    x_github_event: str = Header(alias="x-github-event"),
 ):
-    if x_github_event != "pull_request":
-        return UJSONResponse({"message": "Event ignored"})
+    if x_github_event == "pull_request":
+        gh_request = GitHubRequest(**await request.json())
+        try:
+            files = await get_pr_files(gh_request.payload.repository.full_name, gh_request.payload.number)
+            commit_sha = await get_pr_head_sha(gh_request.payload.repository.full_name, gh_request.payload.number)
+            comments = await review_code_with_claude(
+                files, gh_request.payload.pull_request.title, gh_request.payload.pull_request.body
+            )
 
-    if gh_request.action not in ["opened", "synchronize"]:
-        return UJSONResponse({"message": f"Action '{gh_request.action}' ignored"})
+            await post_review_comments(
+                gh_request.payload.repository.full_name,
+                gh_request.payload.pull_request.number,
+                commit_sha,
+                comments,
+            )
 
-    try:
-        files = await get_pr_files(gh_request.pull_request.repository.full_name, gh_request.pull_request.number)
-        commit_sha = await get_pr_head_sha(gh_request.pull_request.repository.full_name, gh_request.pull_request.number)
-        comments = await review_code_with_claude(files, gh_request.pull_request.title, gh_request.pull_request.body)
-
-        await post_review_comments(
-            gh_request.pull_request.repository.full_name,
-            gh_request.pull_request.number,
-            commit_sha,
-            comments,
-        )
-
-        return UJSONResponse(
-            {
-                "message": "Review posted successfully",
-                "pr_number": gh_request.pull_request.number,
-                "comments_count": len(comments),
-            }
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+            return UJSONResponse(
+                {
+                    "message": "Review posted successfully",
+                    "pr_number": gh_request.payload.pull_request.number,
+                    "comments_count": len(comments),
+                }
+            )
+        except (HTTPError, TransportError):
+            logger.exception("Unexpected error processing webhook", extra={"event": x_github_event})
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+    return None
 
 
 @app.get("/health")

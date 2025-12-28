@@ -1,5 +1,6 @@
 from datetime import timedelta, datetime
 from typing import Any
+import time
 
 from aws_lambda_powertools import Logger
 from fastapi import status
@@ -64,3 +65,59 @@ class RateLimitingMiddleware(BaseHTTPMiddleware):
                 int((client["last_request"].replace(second=0, microsecond=0) + timedelta(minutes=1)).timestamp())
             ),
         }
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: ASGIApp):
+        super().__init__(app)
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if not settings.debug:
+            logger.info("Request logging is turned off")
+            return await call_next(request)
+
+        start_time = time.time()
+        client_ip = request.client.host if request.client else "Unknown"
+        method = request.method
+        path = request.url.path
+        query_params = dict(request.query_params) if request.query_params else {}
+        headers = dict(request.headers)
+
+        body = None
+        try:
+            if method in ["POST", "PUT", "PATCH"]:
+                body = await request.body()
+                if body:
+                    try:
+                        body = body.decode()
+                    except (UnicodeDecodeError, AttributeError):
+                        body = str(body)
+        except Exception as e:
+            logger.debug("Error reading request body", error=str(e))
+
+        logger.debug(
+            "Incoming request",
+            method=method,
+            path=path,
+            client_ip=client_ip,
+            query_params=query_params,
+            headers=headers,
+            body=body,
+        )
+
+        response = await call_next(request)
+
+        process_time = time.time() - start_time
+        response.headers["X-Process-Time"] = str(process_time)
+
+        logger.debug(
+            "Outgoing response",
+            method=method,
+            path=path,
+            client_ip=client_ip,
+            status_code=response.status_code,
+            response_headers=dict(response.headers),
+            process_time=process_time,
+        )
+
+        return response
