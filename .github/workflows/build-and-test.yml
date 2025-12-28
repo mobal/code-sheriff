@@ -43,8 +43,8 @@ jobs:
       run: |
         uv run -m pytest --cov-report=term --cov-report=xml:$Coverage_File --cov=app
 
-    - name: Scan with SonarCloud
-      uses: sonarsource/sonarcloud-github-action@v5
+    - name: SonarQube Scan
+      uses: SonarSource/sonarqube-scan-action@v6
       with:
         args: >
           -Dsonar.language=python
