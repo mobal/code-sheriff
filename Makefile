@@ -1,4 +1,7 @@
-all: format lint test
+all: bandit format lint test
+
+bandit:
+	uv run -m bandit --severity-level high --confidence-level high -r app/ -vvv
 
 format:
 	uv run ruff format .
