@@ -1,4 +1,4 @@
-all: bandit format lint test
+all: bandit format lint ty test
 
 bandit:
 	uv run -m bandit --severity-level high --confidence-level high -r app/ -vvv
@@ -14,3 +14,6 @@ lint:
 
 test:
 	uv run pytest tests/ --cov=app --cov-report=term-missing --cov-branch
+
+ty:
+	uv run ty check

@@ -1,4 +1,5 @@
 import uuid
+from types import MappingProxyType
 from typing import Sequence, Any
 
 import uvicorn
@@ -26,9 +27,9 @@ if settings.debug:
     logger.setLevel("DEBUG")
 
 app = FastAPI(debug=settings.debug)
-app.add_middleware(GZipMiddleware)
-app.add_middleware(RateLimitingMiddleware)
-app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(GZipMiddleware)  # ty: ignore
+app.add_middleware(RateLimitingMiddleware)  # ty: ignore
+app.add_middleware(RequestLoggingMiddleware)  # ty: ignore
 
 handler = Mangum(app)
 handler = logger.inject_lambda_context(handler, log_event=True, clear_state=True)
@@ -105,13 +106,15 @@ async def get_pr_files(repo_full_name: str, pr_number: int) -> list[dict]:
         return response.json()
 
 
-async def review_code_with_claude(files: list[dict], pr_title: str, pr_body: str) -> list[dict]:
+async def review_code_with_claude(files: list[dict], pr_title: str, pr_body: str | None) -> list[dict]:
     url = ANTHROPIC_API_MESSAGES_URL
-    headers = {
-        "x-api-key": settings.anthropic_api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
+    headers = MappingProxyType(
+        {
+            "x-api-key": settings.anthropic_api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+    )
 
     files_summary = []
     for f in files[:10]:
