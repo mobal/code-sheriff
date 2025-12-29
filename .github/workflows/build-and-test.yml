@@ -1,10 +1,10 @@
 name: Build and test
 
-on: [push, pull_request]
+on: [push]
 
 jobs:
   build-and-test:
-    name: Build
+    name: Build and test
     runs-on: ubuntu-24.04
     env:
       Coverage_File: coverage.xml
@@ -38,6 +38,14 @@ jobs:
     - name: Run Bandit security scanner
       run: |
         uv run -m bandit --severity-level high --confidence-level high -r app/ -vvv
+
+    - name: Run ruff linter
+      run: |
+        uv run ruff check app/ tests/ --statistics
+
+    - name: Run ty type checker
+      run: |
+        uv run ty check
 
     - name: Running tests with Pytest and generate coverage
       run: |
