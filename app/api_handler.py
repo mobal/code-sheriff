@@ -2,6 +2,7 @@ import uuid
 from types import MappingProxyType
 from typing import Sequence, Any
 
+import ujson
 import uvicorn
 from aws_lambda_powertools.logging import Logger
 from aws_lambda_powertools.logging.logger import set_package_logger
@@ -11,7 +12,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import UJSONResponse
 import httpx
 from httpx import HTTPError, TransportError
-import json
 
 from mangum import Mangum
 from starlette.middleware.gzip import GZipMiddleware
@@ -134,7 +134,7 @@ PR Title: {pr_title}
 PR Description: {pr_body or "No description provided"}
 
 Files changed:
-{json.dumps(files_summary, indent=2)}
+{ujson.dumps(files_summary, indent=2)}
 
 For each issue you find, provide:
 1. The exact filename
@@ -179,10 +179,10 @@ If no issues found, return an empty array: []"""
             elif "```" in review_text:
                 review_text = review_text.split("```")[1].split("```")[0]
 
-            comments = json.loads(review_text.strip())
+            comments = ujson.loads(review_text.strip())
             logger.info(f"Found {len(comments)} comments", extra={"comments": comments})
             return comments if isinstance(comments, list) else []
-        except json.JSONDecodeError:
+        except ujson.JSONDecodeError:
             return []
 
 
