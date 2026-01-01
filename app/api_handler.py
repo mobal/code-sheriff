@@ -109,7 +109,7 @@ async def get_pr_files(repo_full_name: str, pr_number: int) -> list[dict]:
 async def review_code_with_claude(
     files: list[dict],
     pr_title: str,
-    pr_body: str,
+    pr_body: str | None,
 ) -> list[dict]:
     files_summary = summarize_files(files)
     prompt = build_review_prompt(pr_title, pr_body, files_summary)
@@ -154,7 +154,7 @@ def summarize_files(files: list[dict], limit: int = 10) -> list[dict]:
 
 def build_review_prompt(
     pr_title: str,
-    pr_body: str,
+    pr_body: str | None,
     files_summary: list[dict],
 ) -> str:
     return dedent(
