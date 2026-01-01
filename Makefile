@@ -10,7 +10,7 @@ install:
 	uv sync
 
 lint:
-	uv run ruff check app/ tests/ --fix --statistics
+	uv run ruff check app/ tests/ --fix
 
 test:
 	uv run pytest tests/ --cov=app --cov-report=term-missing --cov-branch
