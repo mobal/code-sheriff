@@ -1,6 +1,9 @@
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from typing import Sequence, Any
 
+import ujson
 import uvicorn
 from aws_lambda_powertools.logging import Logger
 from aws_lambda_powertools.logging.logger import set_package_logger
@@ -10,7 +13,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import UJSONResponse
 import httpx
 from httpx import HTTPError, TransportError
-import json
 
 from mangum import Mangum
 from starlette.middleware.gzip import GZipMiddleware
@@ -26,15 +28,16 @@ if settings.debug:
     logger.setLevel("DEBUG")
 
 app = FastAPI(debug=settings.debug)
-app.add_middleware(GZipMiddleware)
-app.add_middleware(RateLimitingMiddleware)
-app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(GZipMiddleware)  # ty: ignore
+app.add_middleware(RateLimitingMiddleware)  # ty: ignore
+app.add_middleware(RequestLoggingMiddleware)  # ty: ignore
 
 handler = Mangum(app)
 handler = logger.inject_lambda_context(handler, log_event=True, clear_state=True)
 
 
 ANTHROPIC_API_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+BASE_DIR = Path(__file__).resolve().parent
 GITHUB_API_REPOS_BASE_URL = "https://api.github.com/repos"
 GITHUB_HEADERS = {
     "Authorization": f"token {settings.github_token}",
@@ -105,17 +108,40 @@ async def get_pr_files(repo_full_name: str, pr_number: int) -> list[dict]:
         return response.json()
 
 
-async def review_code_with_claude(files: list[dict], pr_title: str, pr_body: str) -> list[dict]:
-    url = ANTHROPIC_API_MESSAGES_URL
-    headers = {
-        "x-api-key": settings.anthropic_api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
+async def review_code_with_claude(
+    files: list[dict],
+    pr_title: str,
+    pr_body: str | None,
+) -> list[dict]:
+    files_summary = summarize_files(files)
+    prompt = build_review_prompt(pr_title, pr_body, files_summary)
 
-    files_summary = []
-    for f in files[:10]:
-        files_summary.append(
+    response_text = await call_claude_api(prompt)
+
+    try:
+        comments = parse_review_comments(response_text)
+        valid_comments = validate_comments(comments)
+
+        logger.info(
+            "Found %s comments",
+            len(valid_comments),
+            extra={"comments": valid_comments},
+        )
+        return valid_comments
+
+    except ujson.JSONDecodeError:
+        logger.exception(
+            "Failed to parse JSON response",
+            extra={"response": response_text},
+        )
+        return []
+
+
+def summarize_files(files: list[dict], limit: int = 10) -> list[dict]:
+    summaries: list[dict] = []
+
+    for f in files[:limit]:
+        summaries.append(
             {
                 "filename": f["filename"],
                 "status": f["status"],
@@ -125,62 +151,88 @@ async def review_code_with_claude(files: list[dict], pr_title: str, pr_body: str
             }
         )
 
-    prompt = f"""Review this pull request and provide specific line-by-line feedback.
+    return summaries
 
-PR Title: {pr_title}
-PR Description: {pr_body or "No description provided"}
 
-Files changed:
-{json.dumps(files_summary, indent=2)}
+def load_prompt(name: str) -> str:
+    path = BASE_DIR / "prompts" / name
+    return path.read_text(encoding="utf-8")
 
-For each issue you find, provide:
-1. The exact filename
-2. The line number (from the patch context)
-3. A specific, actionable comment
 
-Respond ONLY with a JSON array of review comments in this exact format:
-[
-  {{
-    "path": "path/to/file.py",
-    "line": 42,
-    "side": "RIGHT",
-    "body": "Consider adding error handling here for edge cases."
-  }}
-]
+@lru_cache
+def get_review_prompt_template() -> str:
+    return load_prompt("pr_review.txt")
 
-Focus on:
-- Bugs and potential errors
-- Security vulnerabilities
-- Performance issues
-- Code quality and best practices
-- Logic errors
 
-If no issues found, return an empty array: []"""
+def build_review_prompt(
+    pr_title: str,
+    pr_body: str | None,
+    files_summary: list[dict],
+) -> str:
+    return (
+        load_prompt("pr_review.txt")
+        .replace("{{ pr_title }}", pr_title)
+        .replace("{{ pr_body }}", pr_body or "No description provided")
+        .replace(
+            "{{ files_summary }}",
+            ujson.dumps(files_summary, indent=2),
+        )
+        .strip()
+    )
 
+
+async def call_claude_api(prompt: str) -> str:
     payload = {
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 4000,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        "max_tokens": 8000,
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            }
+        ],
     }
 
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            ANTHROPIC_API_MESSAGES_URL,
+            headers=build_headers(),
+            json=payload,
+        )
         response.raise_for_status()
-        data = response.json()
 
-        review_text = data["content"][0]["text"]
+    data = response.json()
+    return data["content"][0]["text"]
 
-        try:
-            if "```json" in review_text:
-                review_text = review_text.split("```json")[1].split("```")[0]
-            elif "```" in review_text:
-                review_text = review_text.split("```")[1].split("```")[0]
 
-            comments = json.loads(review_text.strip())
-            logger.info(f"Found {len(comments)} comments", extra={"comments": comments})
-            return comments if isinstance(comments, list) else []
-        except json.JSONDecodeError:
-            return []
+def build_headers() -> dict:
+    return {
+        "x-api-key": settings.anthropic_api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+
+def parse_review_comments(response_text: str) -> list[dict]:
+    json_block = extract_json_block(response_text)
+    return ujson.loads(json_block)
+
+
+def extract_json_block(text: str) -> str:
+    if "```json" in text:
+        return text.split("```json")[1].split("```")[0].strip()
+
+    if "```" in text:
+        return text.split("```")[1].split("```")[0].strip()
+
+    return text.strip()
+
+
+def validate_comments(comments: list[dict]) -> list[dict]:
+    required_keys = {"path", "line", "body"}
+
+    return [comment for comment in comments if isinstance(comment, dict) and required_keys.issubset(comment)]
 
 
 async def get_pr_head_sha(repo_full_name: str, pr_number: int) -> str:
