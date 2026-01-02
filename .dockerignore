@@ -3,7 +3,7 @@
 
 # Secrets & sensitive files (ALWAYS EXCLUDED FOR SECURITY)
 .env
-env.example
+.env.*
 *.key
 *.pem
 *_rsa
