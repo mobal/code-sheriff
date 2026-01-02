@@ -1,5 +1,6 @@
 import uuid
-from textwrap import dedent
+from functools import lru_cache
+from pathlib import Path
 from typing import Sequence, Any
 
 import ujson
@@ -36,6 +37,7 @@ handler = logger.inject_lambda_context(handler, log_event=True, clear_state=True
 
 
 ANTHROPIC_API_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+BASE_DIR = Path(__file__).resolve().parent
 GITHUB_API_REPOS_BASE_URL = "https://api.github.com/repos"
 GITHUB_HEADERS = {
     "Authorization": f"token {settings.github_token}",
@@ -152,55 +154,31 @@ def summarize_files(files: list[dict], limit: int = 10) -> list[dict]:
     return summaries
 
 
+def load_prompt(name: str) -> str:
+    path = BASE_DIR / "prompts" / name
+    return path.read_text(encoding="utf-8")
+
+
+@lru_cache
+def get_review_prompt_template() -> str:
+    return load_prompt("pr_review.txt")
+
+
 def build_review_prompt(
     pr_title: str,
     pr_body: str | None,
     files_summary: list[dict],
 ) -> str:
-    return dedent(
-        f"""
-        You are an expert code reviewer conducting a thorough pull request review.
-        Analyze the code changes and provide specific, actionable feedback.
-
-        PR Title: {pr_title}
-        PR Description: {pr_body or "No description provided"}
-
-        Files changed:
-        {ujson.dumps(files_summary, indent=2)}
-
-        REVIEW GUIDELINES:
-
-        1. CRITICAL ISSUES:
-        - Security vulnerabilities
-        - Data loss risks
-        - Memory or resource leaks
-        - Breaking changes
-        - Null handling issues
-        - Concurrency problems
-
-        2. HIGH-PRIORITY ISSUES:
-        - Logic errors
-        - Error handling
-        - Performance issues
-        - Input validation
-        - Edge cases
-
-        3. CODE QUALITY:
-        - Duplication
-        - Complexity
-        - Naming
-        - Magic numbers
-        - SOLID violations
-
-        4. BEST PRACTICES:
-        - Missing tests
-        - Logging issues
-        - Hardcoded configuration
-        - Poor organization
-
-        Respond ONLY with a JSON array. If no issues found, return [].
-        """
-    ).strip()
+    return (
+        load_prompt("pr_review.txt")
+        .replace("{{ pr_title }}", pr_title)
+        .replace("{{ pr_body }}", pr_body or "No description provided")
+        .replace(
+            "{{ files_summary }}",
+            ujson.dumps(files_summary, indent=2),
+        )
+        .strip()
+    )
 
 
 async def call_claude_api(prompt: str) -> str:

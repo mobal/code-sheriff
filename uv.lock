@@ -95,6 +95,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "ujson" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -106,7 +107,6 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "ty" },
-    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -120,6 +120,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "ujson", specifier = ">=5.11.0" },
+    { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -131,7 +132,6 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff", specifier = ">=0.14.10" },
     { name = "ty", specifier = ">=0.0.7" },
-    { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 
 [[package]]
