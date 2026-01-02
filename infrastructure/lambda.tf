@@ -4,11 +4,11 @@ resource "aws_lambda_function" "fastapi" {
   runtime       = "python3.13"
   handler       = "app.api_handler.handler"
 
-  filename      = data.archive_file.lambda_zip.output_path
+  filename         = "${path.module}/../dist/api.zip"
   source_code_hash = filebase64sha256("${path.module}/../dist/api.zip")
 
   architectures = [var.architecture]
-  timeout       = 15
+  timeout       = 120
   memory_size   = 768
 
   layers = [
