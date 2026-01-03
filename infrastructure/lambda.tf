@@ -4,8 +4,10 @@ resource "aws_lambda_function" "fastapi" {
   runtime       = "python3.13"
   handler       = "app.api_handler.handler"
 
-  filename         = "${path.module}/../dist/api.zip"
-  source_code_hash = filebase64sha256("${path.module}/../dist/api.zip")
+  s3_bucket = var.artifact_bucket
+  s3_key    = "${var.app_name}/api-${var.content_hash}.zip"
+
+  source_code_hash = base64encode(var.content_hash)
 
   architectures = [var.architecture]
   timeout       = 120
