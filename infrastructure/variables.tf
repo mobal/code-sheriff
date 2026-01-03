@@ -8,6 +8,10 @@ variable "stage" {
   type    = string
 }
 
+variable "anthropic_api_key" {
+  type = string
+}
+
 variable "app_name" {
   default = "code-sheriff"
   type    = string
@@ -18,13 +22,35 @@ variable "architecture" {
   type    = string
 }
 
+variable "artifact_bucket" {
+  type    = string
+}
+
+variable "content_hash" {
+  type    = string
+}
+
 variable "debug" {
   default = false
   type    = bool
 }
 
+variable "github_token" {
+  type = string
+}
+
+variable "github_webhook_secret" {
+  default = ""
+  type    = string
+}
+
 variable "log_level" {
   default = "INFO"
+  type    = string
+}
+
+variable "power_tools_service_name" {
+  default = "code-sheriff"
   type    = string
 }
 
@@ -43,22 +69,8 @@ variable "rate_limiting" {
   type    = bool
 }
 
-variable "power_tools_service_name" {
-  default = "code-sheriff"
-  type    = string
-}
-
-variable "anthropic_api_key" {
+variable "requirements_layer_content_hash" {
   type = string
-}
-
-variable "github_token" {
-  type = string
-}
-
-variable "github_webhook_secret" {
-  default = ""
-  type    = string
 }
 
 variable "tags" {
