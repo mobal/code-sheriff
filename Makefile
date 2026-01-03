@@ -5,10 +5,10 @@ all: build bandit format lint ty test
 build: build-layer build-api
 
 build-layer:
-	./build/build_requirements_layer.sh
+	./scripts/build_requirements_layer.sh
 
 build-api:
-	./build/build_api.sh
+	./scripts/build_api.sh
 
 format:
 	uv run ruff format .
